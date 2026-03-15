@@ -37,6 +37,16 @@ ERROR_PATTERNS: dict[str, list[str]] = {
         r"ECONNRESET",
         r"dial tcp.*i/o timeout",
     ],
+    "deploy": [
+        r"systemctl.*failed",
+        r"docker.*error",
+        r"container.*exited",
+        r"nginx.*\[emerg\]",
+        r"Permission denied",
+        r"No space left on device",
+        r"port.*already in use",
+        r"Health check failed",
+    ],
 }
 
 

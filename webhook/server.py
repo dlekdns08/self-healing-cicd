@@ -1,11 +1,13 @@
 """
-FastAPI webhook server — GitHub Actions workflow_run 이벤트 수신
+FastAPI webhook server — GitHub Actions workflow_run 이벤트 수신 + 범용 CI webhook
 """
 import hashlib
 import hmac
 import os
+import time
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from pydantic import BaseModel
 
 from agent.graph import run_healing_agent
 from storage.db import save_run_event
@@ -15,6 +17,7 @@ from webhook.parser import classify_error
 app = FastAPI(title="Self-Healing CI/CD Webhook")
 
 GITHUB_WEBHOOK_SECRET = os.environ["GITHUB_WEBHOOK_SECRET"]
+CI_WEBHOOK_TOKEN = os.environ.get("CI_WEBHOOK_TOKEN", "")
 
 
 def _verify_signature(body: bytes, sig_header: str) -> None:
@@ -54,6 +57,47 @@ async def github_webhook(
     import asyncio
     asyncio.create_task(
         run_healing_agent(run_id=run_id, repo=repo, error_info=error_info, logs=logs)
+    )
+
+    return {"status": "accepted", "run_id": run_id, "error_type": error_info["type"]}
+
+
+class CIPayload(BaseModel):
+    repo: str                          # "owner/repo" 형식
+    run_id: int | None = None          # 없으면 타임스탬프로 자동 생성
+    logs: str = ""                     # 배포/빌드 로그 전문
+    error_message: str = ""            # 로그 없이 에러 메시지만 전달할 때
+
+
+@app.post("/webhook/ci")
+async def ci_webhook(
+    payload: CIPayload,
+    x_ci_token: str = Header(default=""),
+):
+    """
+    범용 CI webhook — git runner, 배포 스크립트 등에서 직접 호출.
+
+    호출 예시 (배포 스크립트 내):
+        curl -X POST http://<서버>:8080/webhook/ci \\
+          -H 'Content-Type: application/json' \\
+          -H 'x-ci-token: <CI_WEBHOOK_TOKEN>' \\
+          -d '{"repo":"owner/repo","logs":"...","error_message":"..."}'
+    """
+    if CI_WEBHOOK_TOKEN and not hmac.compare_digest(CI_WEBHOOK_TOKEN, x_ci_token):
+        raise HTTPException(status_code=401, detail="Invalid CI token")
+
+    run_id = payload.run_id or int(time.time())
+    logs = payload.logs
+    if payload.error_message:
+        logs = f"{payload.error_message}\n\n{logs}".strip()
+
+    error_info = classify_error(logs)
+
+    save_run_event(run_id=run_id, repo=payload.repo, error_info=error_info)
+
+    import asyncio
+    asyncio.create_task(
+        run_healing_agent(run_id=run_id, repo=payload.repo, error_info=error_info, logs=logs)
     )
 
     return {"status": "accepted", "run_id": run_id, "error_type": error_info["type"]}

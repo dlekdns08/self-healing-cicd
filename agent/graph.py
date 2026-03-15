@@ -6,7 +6,6 @@ from __future__ import annotations
 import os
 from typing import Annotated, TypedDict
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
@@ -20,10 +19,34 @@ from tools.definitions import TOOLS
 
 MAX_RETRIES = SAFETY_CONFIG["max_retries"]
 
-llm = ChatAnthropic(
-    model=os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"),
-    temperature=0,
-).bind_tools(TOOLS)
+_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic").lower()
+
+
+def _build_llm():
+    if _LLM_PROVIDER == "ollama":
+        from langchain_ollama import ChatOllama
+        return ChatOllama(
+            model=os.environ.get("OLLAMA_MODEL", "llama3"),
+            base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
+            temperature=0,
+        ).bind_tools(TOOLS)
+    elif _LLM_PROVIDER in ("openai", "openai_compatible"):
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model=os.environ.get("OPENAI_MODEL", "gpt-4o"),
+            base_url=os.environ.get("OPENAI_BASE_URL") or None,  # None → 기본 OpenAI, URL 설정 시 LM Studio/vLLM 등 호환
+            api_key=os.environ.get("OPENAI_API_KEY", ""),
+            temperature=0,
+        ).bind_tools(TOOLS)
+    else:  # anthropic (기본값)
+        from langchain_anthropic import ChatAnthropic
+        return ChatAnthropic(
+            model=os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"),
+            temperature=0,
+        ).bind_tools(TOOLS)
+
+
+llm = _build_llm()
 
 
 class AgentState(TypedDict):
