@@ -1,6 +1,9 @@
 """
 애플리케이션 진입점
 """
+from dotenv import load_dotenv
+load_dotenv()
+
 import uvicorn
 from storage.db import init_db
 from webhook.server import app
