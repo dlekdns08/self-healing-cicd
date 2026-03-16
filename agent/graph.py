@@ -13,7 +13,7 @@ from langgraph.prebuilt import ToolNode
 
 from agent.prompts import build_system_prompt
 from config.safety import SAFETY_CONFIG
-from notifier.slack import notify_escalation, request_human_approval
+from notifier.slack import notify_escalation, notify_resolved, notify_started, request_human_approval
 from storage.db import save_attempt
 from tools.definitions import TOOLS
 
@@ -166,4 +166,8 @@ async def run_healing_agent(
         "resolved": False,
         "escalated": False,
     }
-    return await _graph.ainvoke(initial)
+    notify_started(run_id=run_id, repo=repo, error_info=error_info)
+    result = await _graph.ainvoke(initial)
+    if result.get("resolved"):
+        notify_resolved(run_id=run_id, repo=repo, attempt_count=result["attempt_count"])
+    return result

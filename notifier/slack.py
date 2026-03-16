@@ -25,6 +25,25 @@ def _post_message(text: str, blocks: list | None = None) -> str:
     return data.get("ts", "")
 
 
+def notify_started(run_id: int, repo: str, error_info: dict) -> None:
+    text = (
+        f":mag: *CI/CD 자가치유 시작*\n"
+        f"저장소: `{repo}` | Run ID: `{run_id}`\n"
+        f"에러 유형: `{error_info['type']}`\n"
+        f"매칭 패턴: `{error_info.get('matched_pattern', 'N/A')}`"
+    )
+    _post_message(text)
+
+
+def notify_resolved(run_id: int, repo: str, attempt_count: int) -> None:
+    text = (
+        f":white_check_mark: *CI/CD 자가치유 완료*\n"
+        f"저장소: `{repo}` | Run ID: `{run_id}`\n"
+        f"시도 횟수: {attempt_count}"
+    )
+    _post_message(text)
+
+
 def notify_escalation(run_id: int, repo: str, error_info: dict, attempt_count: int) -> None:
     text = (
         f":rotating_light: *CI/CD 자가치유 실패 — 에스컬레이션*\n"
