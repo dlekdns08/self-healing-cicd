@@ -65,14 +65,36 @@ class AgentState(TypedDict):
 
 # ── 노드 정의 ──────────────────────────────────────────────
 
+_REPO_PATH_MAP: dict[str, str] = {
+    "api": "/home/api",
+    "blog": "/home/blog",
+}
+
+
+def _resolve_repo_path(repo: str) -> str:
+    """'owner/repo' → 로컬 절대경로"""
+    repo_name = repo.split("/")[-1].lower()
+    return _REPO_PATH_MAP.get(repo_name, f"/home/{repo_name}")
+
+
 def diagnose_node(state: AgentState) -> dict:
     logger.info("[agent] diagnose 시작 | run_id=%s repo=%s error_type=%s attempt=%s",
                 state["run_id"], state["repo"], state["error_info"]["type"], state["attempt_count"])
     system = build_system_prompt(state["error_info"], state["repo"])
-    user_msg = HumanMessage(
-        content=f"로그 스니펫:\n\n{state['error_info']['snippet']}"
-    )
-    messages = [user_msg] if not state["messages"] else state["messages"]
+
+    if not state["messages"]:
+        repo_path = _resolve_repo_path(state["repo"])
+        user_content = (
+            f"저장소 로컬 경로: {repo_path}\n\n"
+            f"전체 로그:\n{state['logs']}\n\n"
+            f"에러 스니펫:\n{state['error_info']['snippet']}\n\n"
+            f"read_file → apply_patch → security_scan → git_commit_push → re_trigger_pipeline 순서로 진행하세요. "
+            f"run_shell은 검증 목적으로만 사용하고 파일 읽기에는 절대 사용하지 마세요."
+        )
+        messages = [HumanMessage(content=user_content)]
+    else:
+        messages = state["messages"]
+
     response: AIMessage = llm.invoke([("system", system)] + messages)
     tool_calls = [c["name"] for c in response.tool_calls] if response.tool_calls else []
     logger.info("[agent] diagnose 완료 | tool_calls=%s", tool_calls)
