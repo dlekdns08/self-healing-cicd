@@ -3,10 +3,13 @@ LangGraph ReAct 에이전트 — 진단 → 실행 → 검증 루프
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Annotated, TypedDict
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+logger = logging.getLogger(__name__)
+
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -63,19 +66,27 @@ class AgentState(TypedDict):
 # ── 노드 정의 ──────────────────────────────────────────────
 
 def diagnose_node(state: AgentState) -> dict:
+    logger.info("[agent] diagnose 시작 | run_id=%s repo=%s error_type=%s attempt=%s",
+                state["run_id"], state["repo"], state["error_info"]["type"], state["attempt_count"])
     system = build_system_prompt(state["error_info"], state["repo"])
     user_msg = HumanMessage(
         content=f"로그 스니펫:\n\n{state['error_info']['snippet']}"
     )
     messages = [user_msg] if not state["messages"] else state["messages"]
     response: AIMessage = llm.invoke([("system", system)] + messages)
+    tool_calls = [c["name"] for c in response.tool_calls] if response.tool_calls else []
+    logger.info("[agent] diagnose 완료 | tool_calls=%s", tool_calls)
     return {"messages": [response]}
 
 
 def tool_node(state: AgentState) -> dict:
+    last = state["messages"][-1]
+    tool_names = [c["name"] for c in last.tool_calls] if isinstance(last, AIMessage) and last.tool_calls else []
+    logger.info("[agent] 도구 실행 | tools=%s", tool_names)
     node = ToolNode(TOOLS)
     result = node.invoke(state)
     attempt = state["attempt_count"] + 1
+    logger.info("[agent] 도구 실행 완료 | attempt=%s", attempt)
     save_attempt(
         run_id=state["run_id"],
         attempt=attempt,
@@ -86,13 +97,17 @@ def tool_node(state: AgentState) -> dict:
 
 def validate_node(state: AgentState) -> dict:
     last = state["messages"][-1]
-    # 도구 결과에 "SUCCESS" 포함 여부로 간단 판정 (실제론 re-trigger 결과 폴링)
-    if isinstance(last, AIMessage) and "SUCCESS" in last.content.upper():
+    # ToolMessage(apply_patch 결과) 또는 AIMessage 모두에서 SUCCESS 체크
+    content = last.content if isinstance(last.content, str) else str(last.content)
+    resolved = "SUCCESS" in content.upper()
+    logger.info("[agent] validate | resolved=%s last_type=%s", resolved, type(last).__name__)
+    if resolved:
         return {"resolved": True}
     return {}
 
 
 def escalate_node(state: AgentState) -> dict:
+    logger.warning("[agent] 에스컬레이션 | run_id=%s attempt=%s", state["run_id"], state["attempt_count"])
     notify_escalation(
         run_id=state["run_id"],
         repo=state["repo"],
@@ -166,8 +181,14 @@ async def run_healing_agent(
         "resolved": False,
         "escalated": False,
     }
+    logger.info("[agent] 시작 | run_id=%s repo=%s error_type=%s", run_id, repo, error_info["type"])
     notify_started(run_id=run_id, repo=repo, error_info=error_info)
     result = await _graph.ainvoke(initial)
     if result.get("resolved"):
+        logger.info("[agent] 해결 완료 | run_id=%s", run_id)
         notify_resolved(run_id=run_id, repo=repo, attempt_count=result["attempt_count"])
+    elif result.get("escalated"):
+        logger.warning("[agent] 에스컬레이션 완료 | run_id=%s", run_id)
+    else:
+        logger.info("[agent] 종료 (조치 없음) | run_id=%s", run_id)
     return result
