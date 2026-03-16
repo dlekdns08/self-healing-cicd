@@ -55,9 +55,15 @@ async def github_webhook(
 
     # 에이전트 비동기 실행 (백그라운드)
     import asyncio
-    asyncio.create_task(
-        run_healing_agent(run_id=run_id, repo=repo, error_info=error_info, logs=logs)
-    )
+    import logging
+
+    async def _run_with_log():
+        try:
+            await run_healing_agent(run_id=run_id, repo=repo, error_info=error_info, logs=logs)
+        except Exception:
+            logging.exception("[self-healing] agent 실행 중 오류")
+
+    asyncio.create_task(_run_with_log())
 
     return {"status": "accepted", "run_id": run_id, "error_type": error_info["type"]}
 
@@ -96,9 +102,15 @@ async def ci_webhook(
     save_run_event(run_id=run_id, repo=payload.repo, error_info=error_info)
 
     import asyncio
-    asyncio.create_task(
-        run_healing_agent(run_id=run_id, repo=payload.repo, error_info=error_info, logs=logs)
-    )
+    import logging
+
+    async def _run_with_log():
+        try:
+            await run_healing_agent(run_id=run_id, repo=payload.repo, error_info=error_info, logs=logs)
+        except Exception:
+            logging.exception("[self-healing] agent 실행 중 오류")
+
+    asyncio.create_task(_run_with_log())
 
     return {"status": "accepted", "run_id": run_id, "error_type": error_info["type"]}
 
