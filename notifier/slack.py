@@ -4,6 +4,8 @@ Slack 알림 — 에스컬레이션 및 인간 승인 요청
 import os
 import time
 
+import logging
+
 import httpx
 
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
@@ -22,6 +24,8 @@ def _post_message(text: str, blocks: list | None = None) -> str:
         json=payload,
     )
     data = resp.json()
+    if not data.get("ok"):
+        logging.error("[slack] 메시지 전송 실패: %s", data)
     return data.get("ts", "")
 
 
