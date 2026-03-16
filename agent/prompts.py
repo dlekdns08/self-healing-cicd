@@ -5,10 +5,14 @@ from config.safety import SAFETY_CONFIG
 
 _TOOL_DESCRIPTIONS = """
 Available tools:
-- run_shell(cmd): Docker 샌드박스 안에서 쉘 명령 실행 (패키지 설치, 린트 자동수정 등)
-- apply_patch(diff, file_path): LLM이 생성한 unified diff를 파일에 적용
-- re_trigger_pipeline(repo, run_id): GitHub Actions 워크플로우 재실행
+- run_shell(cmd): Docker 샌드박스 안에서 쉘 명령 실행 (패키지 설치, 린트 자동수정 등). 실제 파일 수정 불가.
+- apply_patch(diff, file_path): unified diff를 로컬 파일에 적용. 반드시 git_commit_push와 함께 사용.
+- git_commit_push(repo_path, message): 수정된 파일을 GitHub에 커밋 & 푸시. apply_patch 후 필수 호출.
+- re_trigger_pipeline(repo, run_id): GitHub Actions 워크플로우 재실행. git_commit_push 후 호출.
 - rollback_commit(repo, sha): 지정 커밋으로 revert PR 생성 (고위험 — 인간 승인 필요)
+
+## 코드 수정 순서 (반드시 준수)
+apply_patch → git_commit_push → re_trigger_pipeline
 """
 
 
@@ -16,18 +20,18 @@ _ERROR_STRATEGY = {
     "build": """
 - 코드 문법/컴파일 오류입니다.
 - apply_patch로 해당 파일의 문법 오류를 직접 수정하세요.
-- file_path는 저장소 루트 기준 절대경로(예: /home/{repo}/main.py)로 지정하세요.
-- run_shell로 python -m py_compile 또는 tsc --noEmit 등으로 검증 후 re_trigger_pipeline을 호출하세요.
+- file_path는 절대경로(예: /home/api/main.py)로 지정하세요.
+- 수정 후 반드시 git_commit_push → re_trigger_pipeline 순서로 호출하세요.
 """,
     "runtime": """
 - 런타임 예외입니다.
 - 스택 트레이스에서 원인 파일과 줄을 특정한 뒤 apply_patch로 수정하세요.
-- file_path는 저장소 루트 기준 절대경로로 지정하세요.
+- 수정 후 반드시 git_commit_push → re_trigger_pipeline 순서로 호출하세요.
 """,
     "dependency": """
 - 패키지 의존성 오류입니다.
-- run_shell로 pip install / npm ci 등 누락된 패키지를 설치하거나 requirements.txt/package.json을 수정하세요.
-- 설치 후 re_trigger_pipeline을 호출하세요.
+- apply_patch로 requirements.txt 또는 package.json을 수정하세요.
+- 수정 후 git_commit_push → re_trigger_pipeline 순서로 호출하세요.
 """,
     "test_failure": """
 - 테스트 실패입니다.

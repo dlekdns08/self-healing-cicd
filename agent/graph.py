@@ -96,13 +96,17 @@ def tool_node(state: AgentState) -> dict:
 
 
 def validate_node(state: AgentState) -> dict:
-    last = state["messages"][-1]
-    # ToolMessage(apply_patch 결과) 또는 AIMessage 모두에서 SUCCESS 체크
-    content = last.content if isinstance(last.content, str) else str(last.content)
-    resolved = "SUCCESS" in content.upper()
-    logger.info("[agent] validate | resolved=%s last_type=%s", resolved, type(last).__name__)
-    if resolved:
-        return {"resolved": True}
+    # re_trigger_pipeline 또는 git_commit_push 의 SUCCESS만 진짜 해결로 판정
+    for msg in reversed(state["messages"]):
+        if not isinstance(msg, ToolMessage):
+            continue
+        content = msg.content if isinstance(msg.content, str) else str(msg.content)
+        if "SUCCESS" in content.upper() and any(
+            kw in content for kw in ["파이프라인 재실행", "푸시되었습니다"]
+        ):
+            logger.info("[agent] validate | resolved=True (tool SUCCESS 확인)")
+            return {"resolved": True}
+    logger.info("[agent] validate | resolved=False")
     return {}
 
 
