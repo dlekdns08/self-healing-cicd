@@ -13,25 +13,26 @@ jobs:
           cd /home/self-healing-cicd
           git pull origin main
 
-      - name: Install dependencies
+      - name: Build and run
         run: |
           cd /home/self-healing-cicd
-          uv sync
-
-      - name: Restart service
-        run: sudo systemctl restart self-healing-cicd
+          docker compose down || true
+          docker compose up -d --build
 
       - name: Health check
         run: |
           sleep 5
-          for i in {1..10}; do
-            if sudo systemctl is-active --quiet self-healing-cicd; then
-              echo "Service is running ($i/10)"
+          for i in {1..15}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health 2>/dev/null || echo "000")
+            echo "Status: $STATUS ($i/15)"
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check passed!"
               exit 0
             fi
-            echo "Waiting... ($i/10)"
-            sleep 3
+            sleep 5
           done
           echo "Health check failed!"
-          journalctl -u self-healing-cicd -n 50 --no-pager
+          cd /home/self-healing-cicd
+          docker compose logs --no-color > /tmp/self-healing-logs.txt 2>&1 || true
+          docker compose down || true
           exit 1

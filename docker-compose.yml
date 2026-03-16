@@ -1,0 +1,13 @@
+services:
+  self-healing-cicd:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./storage/db:/app/storage/db
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /home/api:/home/api
+      - /home/blog:/home/blog
+    env_file:
+      - .env
+    restart: always
