@@ -22,7 +22,6 @@ SAFETY_CONFIG: dict = {
     # 실행 전 인간 승인이 필요한 툴
     "require_human_approval_for": [
         "rollback_commit",
-        "apply_patch",
     ],
 
     # Docker 샌드박스 강제 여부
