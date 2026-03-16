@@ -16,7 +16,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd /home/self-healing-cicd
-          /root/.local/bin/uv sync
+          uv sync
 
       - name: Restart service
         run: sudo systemctl restart self-healing-cicd
