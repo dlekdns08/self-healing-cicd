@@ -7,13 +7,15 @@ _TOOL_DESCRIPTIONS = """
 Available tools:
 - read_file(file_path): 호스트 파일 내용을 줄번호와 함께 읽기. apply_patch 전에 반드시 먼저 호출.
 - run_shell(cmd): Docker 샌드박스 안에서 쉘 명령 실행 (검증용). 호스트 파일 접근 불가.
-- apply_patch(diff, file_path): unified diff를 로컬 파일에 적용. 반드시 git_commit_push와 함께 사용.
-- git_commit_push(repo_path, message): 수정된 파일을 GitHub에 커밋 & 푸시. apply_patch 후 필수 호출.
+- apply_patch(diff, file_path): unified diff를 로컬 파일에 적용. 반드시 security_scan 후 git_commit_push와 함께 사용.
+- security_scan(repo_path): 수정된 코드의 보안 취약점 스캔. apply_patch 후, git_commit_push 전에 반드시 호출.
+  → HIGH 이상 이슈 발견 시 커밋 중단하고 에스컬레이션. SUCCESS 시 git_commit_push 진행.
+- git_commit_push(repo_path, message): 수정된 파일을 GitHub에 커밋 & 푸시. security_scan 통과 후 호출.
 - re_trigger_pipeline(repo, run_id): GitHub Actions 워크플로우 재실행. git_commit_push 후 호출.
 - rollback_commit(repo, sha): 지정 커밋으로 revert PR 생성 (고위험 — 인간 승인 필요)
 
 ## 코드 수정 순서 (반드시 준수)
-read_file → apply_patch → git_commit_push → re_trigger_pipeline
+read_file → apply_patch → security_scan → git_commit_push → re_trigger_pipeline
 """
 
 
