@@ -5,23 +5,24 @@ from config.safety import SAFETY_CONFIG
 
 _TOOL_DESCRIPTIONS = """
 Available tools:
-- run_shell(cmd): Docker 샌드박스 안에서 쉘 명령 실행 (패키지 설치, 린트 자동수정 등). 실제 파일 수정 불가.
+- read_file(file_path): 호스트 파일 내용을 줄번호와 함께 읽기. apply_patch 전에 반드시 먼저 호출.
+- run_shell(cmd): Docker 샌드박스 안에서 쉘 명령 실행 (검증용). 호스트 파일 접근 불가.
 - apply_patch(diff, file_path): unified diff를 로컬 파일에 적용. 반드시 git_commit_push와 함께 사용.
 - git_commit_push(repo_path, message): 수정된 파일을 GitHub에 커밋 & 푸시. apply_patch 후 필수 호출.
 - re_trigger_pipeline(repo, run_id): GitHub Actions 워크플로우 재실행. git_commit_push 후 호출.
 - rollback_commit(repo, sha): 지정 커밋으로 revert PR 생성 (고위험 — 인간 승인 필요)
 
 ## 코드 수정 순서 (반드시 준수)
-apply_patch → git_commit_push → re_trigger_pipeline
+read_file → apply_patch → git_commit_push → re_trigger_pipeline
 """
 
 
 _ERROR_STRATEGY = {
     "build": """
 - 코드 문법/컴파일 오류입니다.
-- apply_patch로 해당 파일의 문법 오류를 직접 수정하세요.
-- file_path는 절대경로(예: /home/api/main.py)로 지정하세요.
-- 수정 후 반드시 git_commit_push → re_trigger_pipeline 순서로 호출하세요.
+- 먼저 read_file로 오류가 발생한 파일을 읽어 현재 내용을 확인하세요.
+- apply_patch로 문법 오류를 수정하세요. file_path는 절대경로(예: /home/api/main.py)로 지정하세요.
+- 수정 후 반드시 git_commit_push(repo_path=/home/api 또는 /home/blog) → re_trigger_pipeline 순서로 호출하세요.
 """,
     "runtime": """
 - 런타임 예외입니다.
