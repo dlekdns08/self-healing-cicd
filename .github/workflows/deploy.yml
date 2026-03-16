@@ -8,10 +8,10 @@ jobs:
   deploy:
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
-        with:
-          path: /home/self-healing-cicd
-          clean: false
+      - name: Pull latest code
+        run: |
+          cd /home/self-healing-cicd
+          git pull origin main
 
       - name: Install dependencies
         run: |
