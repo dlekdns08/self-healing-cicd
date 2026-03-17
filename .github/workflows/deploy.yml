@@ -10,12 +10,12 @@ jobs:
     steps:
       - name: Pull latest code
         run: |
-          cd /home/self-healing-cicd
+          cd /app/self-healing-cicd
           git pull origin main
 
       - name: Build and run
         run: |
-          cd /home/self-healing-cicd
+          cd /app/self-healing-cicd
           docker compose down || true
           docker compose up -d --build
 
@@ -32,7 +32,7 @@ jobs:
             sleep 5
           done
           echo "Health check failed!"
-          cd /home/self-healing-cicd
+          cd /app/self-healing-cicd
           docker compose logs --no-color > /tmp/self-healing-logs.txt 2>&1 || true
           docker compose down || true
           exit 1

@@ -94,7 +94,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 source ~/.local/bin/env
 
 # 의존성 설치
-cd /home/self-healing-cicd
+cd /app/self-healing-cicd
 uv sync
 
 # 환경변수 설정

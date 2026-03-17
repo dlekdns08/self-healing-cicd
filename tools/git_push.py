@@ -19,7 +19,7 @@ def git_commit_push(repo_path: str, message: str) -> str:
     """
     지정된 로컬 저장소 경로에서 변경된 파일을 git add → commit → push합니다.
     apply_patch로 파일을 수정한 뒤 반드시 이 툴을 호출해 GitHub에 반영하세요.
-    repo_path: 저장소 루트 절대경로 (예: /home/api)
+    repo_path: 저장소 루트 절대경로 (예: /app/api)
     message: 커밋 메시지
     """
     if not os.path.isdir(repo_path):

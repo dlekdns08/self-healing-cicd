@@ -5,15 +5,15 @@ import os
 
 from langchain_core.tools import tool
 
-_ALLOWED_ROOTS = ["/home/api", "/home/blog"]
+_ALLOWED_ROOTS = ["/app/api", "/app/blog"]
 
 
 @tool
 def read_file(file_path: str) -> str:
     """
     호스트의 파일 내용을 읽어 반환합니다. apply_patch 전에 현재 파일 내용을 확인할 때 사용하세요.
-    file_path: 절대경로 (예: /home/api/main.py)
-    허용 경로: /home/api/**, /home/blog/**
+    file_path: 절대경로 (예: /app/api/main.py)
+    허용 경로: /app/api/**, /app/blog/**
     """
     file_path = os.path.normpath(file_path)
     if not any(file_path.startswith(root) for root in _ALLOWED_ROOTS):

@@ -66,8 +66,8 @@ class AgentState(TypedDict):
 # ── 노드 정의 ──────────────────────────────────────────────
 
 _REPO_PATH_MAP: dict[str, str] = {
-    "api": "/home/api",
-    "blog": "/home/blog",
+    "api": "/app/api",
+    "blog": "/app/blog",
 }
 
 

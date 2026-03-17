@@ -23,8 +23,8 @@ _ERROR_STRATEGY = {
     "build": """
 - 코드 문법/컴파일 오류입니다.
 - 먼저 read_file로 오류가 발생한 파일을 읽어 현재 내용을 확인하세요.
-- apply_patch로 문법 오류를 수정하세요. file_path는 절대경로(예: /home/api/main.py)로 지정하세요.
-- 수정 후 반드시 security_scan → git_commit_push(repo_path=/home/api 또는 /home/blog) → re_trigger_pipeline 순서로 호출하세요.
+- apply_patch로 문법 오류를 수정하세요. file_path는 절대경로(예: /app/api/main.py)로 지정하세요.
+- 수정 후 반드시 security_scan → git_commit_push(repo_path=/app/api 또는 /app/blog) → re_trigger_pipeline 순서로 호출하세요.
 """,
     "runtime": """
 - 런타임 예외입니다.

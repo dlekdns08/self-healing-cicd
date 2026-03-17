@@ -131,7 +131,7 @@ def security_scan(repo_path: str) -> str:
     """
     저장소의 보안 취약점을 스캔합니다.
     apply_patch로 파일을 수정한 후, git_commit_push 전에 반드시 호출하세요.
-    repo_path: 저장소 루트 절대경로 (예: /home/api)
+    repo_path: 저장소 루트 절대경로 (예: /app/api)
     HIGH 이상 이슈가 발견되면 커밋하지 말고 에스컬레이션하세요.
     """
     if not os.path.isdir(repo_path):

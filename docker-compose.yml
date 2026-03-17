@@ -6,8 +6,8 @@ services:
     volumes:
       - ./storage/db:/app/storage/db
       - /var/run/docker.sock:/var/run/docker.sock
-      - /home/api:/home/api
-      - /home/blog:/home/blog
+      - /app/api:/app/api
+      - /app/blog:/app/blog
     env_file:
       - .env
     restart: always
