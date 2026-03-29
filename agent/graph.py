@@ -9,7 +9,7 @@ from typing import Annotated, TypedDict
 
 logger = logging.getLogger(__name__)
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -24,6 +24,9 @@ MAX_RETRIES = SAFETY_CONFIG["max_retries"]
 
 _LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic").lower()
 
+# ToolNode는 모듈 레벨에서 한 번만 생성 (매 호출마다 재생성하지 않음)
+_TOOL_NODE = ToolNode(TOOLS)
+
 
 def _build_llm():
     if _LLM_PROVIDER == "ollama":
@@ -37,7 +40,7 @@ def _build_llm():
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
             model=os.environ.get("OPENAI_MODEL", "gpt-4o"),
-            base_url=os.environ.get("OPENAI_BASE_URL") or None,  # None → 기본 OpenAI, URL 설정 시 LM Studio/vLLM 등 호환
+            base_url=os.environ.get("OPENAI_BASE_URL") or None,
             api_key=os.environ.get("OPENAI_API_KEY", ""),
             temperature=0,
         ).bind_tools(TOOLS)
@@ -49,7 +52,15 @@ def _build_llm():
         ).bind_tools(TOOLS)
 
 
-llm = _build_llm()
+# LLM은 지연 초기화 — 첫 요청 시 생성 (import 시 API 키 없어도 크래시 안 됨)
+_llm: object | None = None
+
+
+def _get_llm():
+    global _llm
+    if _llm is None:
+        _llm = _build_llm()
+    return _llm
 
 
 class AgentState(TypedDict):
@@ -61,9 +72,11 @@ class AgentState(TypedDict):
     attempt_count: int
     resolved: bool
     escalated: bool
+    # 승인이 필요한 tool_call 정보 (approval_node에서 사용)
+    pending_approval_call: dict | None
 
 
-# ── 노드 정의 ──────────────────────────────────────────────
+# ── 저장소 경로 매핑 ────────────────────────────────────────
 
 _REPO_PATH_MAP: dict[str, str] = {
     "api": "/app/api",
@@ -76,6 +89,8 @@ def _resolve_repo_path(repo: str) -> str:
     repo_name = repo.split("/")[-1].lower()
     return _REPO_PATH_MAP.get(repo_name, f"/home/{repo_name}")
 
+
+# ── 노드 정의 ──────────────────────────────────────────────
 
 def diagnose_node(state: AgentState) -> dict:
     logger.info("[agent] diagnose 시작 | run_id=%s repo=%s error_type=%s attempt=%s",
@@ -95,18 +110,17 @@ def diagnose_node(state: AgentState) -> dict:
     else:
         messages = state["messages"]
 
-    response: AIMessage = llm.invoke([("system", system)] + messages)
+    response: AIMessage = _get_llm().invoke([SystemMessage(content=system)] + messages)
     tool_calls = [c["name"] for c in response.tool_calls] if response.tool_calls else []
     logger.info("[agent] diagnose 완료 | tool_calls=%s", tool_calls)
-    return {"messages": [response]}
+    return {"messages": [response], "pending_approval_call": None}
 
 
 def tool_node(state: AgentState) -> dict:
     last = state["messages"][-1]
     tool_names = [c["name"] for c in last.tool_calls] if isinstance(last, AIMessage) and last.tool_calls else []
     logger.info("[agent] 도구 실행 | tools=%s", tool_names)
-    node = ToolNode(TOOLS)
-    result = node.invoke(state)
+    result = _TOOL_NODE.invoke(state)
     attempt = state["attempt_count"] + 1
     logger.info("[agent] 도구 실행 완료 | attempt=%s", attempt)
     save_attempt(
@@ -115,6 +129,27 @@ def tool_node(state: AgentState) -> dict:
         messages=result["messages"],
     )
     return {**result, "attempt_count": attempt}
+
+
+async def approval_node(state: AgentState) -> dict:
+    """고위험 툴 실행 전 Slack을 통해 인간 승인을 비동기로 요청."""
+    call = state.get("pending_approval_call")
+    if not call:
+        logger.warning("[agent] approval_node 호출됐으나 pending_approval_call 없음 — escalate")
+        return {"escalated": True}
+
+    logger.info("[agent] 인간 승인 요청 | run_id=%s tool=%s", state["run_id"], call["name"])
+    approved = await request_human_approval(
+        run_id=state["run_id"],
+        tool_name=call["name"],
+        tool_args=call["args"],
+    )
+    if not approved:
+        logger.warning("[agent] 승인 거부 | run_id=%s tool=%s", state["run_id"], call["name"])
+        return {"escalated": True, "pending_approval_call": None}
+
+    logger.info("[agent] 승인 완료 | run_id=%s tool=%s", state["run_id"], call["name"])
+    return {"pending_approval_call": None}
 
 
 def validate_node(state: AgentState) -> dict:
@@ -129,7 +164,7 @@ def validate_node(state: AgentState) -> dict:
             logger.info("[agent] validate | resolved=True (tool SUCCESS 확인)")
             return {"resolved": True}
     logger.info("[agent] validate | resolved=False")
-    return {}
+    return {"resolved": False}
 
 
 def escalate_node(state: AgentState) -> dict:
@@ -145,33 +180,36 @@ def escalate_node(state: AgentState) -> dict:
 
 # ── 엣지 조건 ──────────────────────────────────────────────
 
+def route_after_diagnose(state: AgentState) -> str:
+    last = state["messages"][-1]
+    if not (isinstance(last, AIMessage) and last.tool_calls):
+        return END
+
+    # 고위험 툴이 있으면 approval 노드로 라우팅 (blocking sleep 없이)
+    for call in last.tool_calls:
+        if call["name"] in SAFETY_CONFIG["require_human_approval_for"]:
+            # pending_approval_call은 diagnose_node 반환값에서 이미 None으로 초기화됨
+            # state를 직접 변경할 수 없으므로 approval 노드에서 messages[-1]에서 읽도록 함
+            return "approval"
+
+    return "tools"
+
+
+def route_after_approval(state: AgentState) -> str:
+    if state.get("escalated"):
+        return "escalate"
+    return "tools"
+
+
 def route_after_validate(state: AgentState) -> str:
     if state.get("resolved"):
         return END
     if state["attempt_count"] >= MAX_RETRIES:
         return "escalate"
-    # 아직 tool_call이 남아있으면 도구 실행, 없으면 재진단
     last = state["messages"][-1]
     if isinstance(last, AIMessage) and last.tool_calls:
         return "tools"
     return "diagnose"
-
-
-def route_after_diagnose(state: AgentState) -> str:
-    last = state["messages"][-1]
-    if isinstance(last, AIMessage) and last.tool_calls:
-        # 고위험 도구는 human-in-the-loop
-        for call in last.tool_calls:
-            if call["name"] in SAFETY_CONFIG["require_human_approval_for"]:
-                approved = request_human_approval(
-                    run_id=state["run_id"],
-                    tool_name=call["name"],
-                    tool_args=call["args"],
-                )
-                if not approved:
-                    return "escalate"
-        return "tools"
-    return END
 
 
 # ── 그래프 조립 ────────────────────────────────────────────
@@ -179,12 +217,14 @@ def route_after_diagnose(state: AgentState) -> str:
 def build_graph() -> StateGraph:
     g = StateGraph(AgentState)
     g.add_node("diagnose", diagnose_node)
+    g.add_node("approval", approval_node)
     g.add_node("tools", tool_node)
     g.add_node("validate", validate_node)
     g.add_node("escalate", escalate_node)
 
     g.set_entry_point("diagnose")
     g.add_conditional_edges("diagnose", route_after_diagnose)
+    g.add_conditional_edges("approval", route_after_approval)
     g.add_edge("tools", "validate")
     g.add_conditional_edges("validate", route_after_validate)
     g.add_edge("escalate", END)
@@ -206,6 +246,7 @@ async def run_healing_agent(
         "attempt_count": 0,
         "resolved": False,
         "escalated": False,
+        "pending_approval_call": None,
     }
     logger.info("[agent] 시작 | run_id=%s repo=%s error_type=%s", run_id, repo, error_info["type"])
     notify_started(run_id=run_id, repo=repo, error_info=error_info)
