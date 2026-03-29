@@ -21,24 +21,34 @@ def apply_patch(diff: str, file_path: str) -> str:
     if ext not in SAFETY_CONFIG["allowed_file_extensions"]:
         return f"ERROR: 허용되지 않은 파일 확장자 — {ext}"
 
+    if not os.path.isfile(file_path):
+        return f"ERROR: 파일이 존재하지 않습니다 — {file_path}"
+
+    # 파일이 있는 디렉터리를 cwd로 설정 (상대경로 패치도 안전하게 처리)
+    cwd = os.path.dirname(os.path.abspath(file_path))
+
     with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as f:
         f.write(diff)
         patch_file = f.name
 
     try:
-        result = subprocess.run(
-            ["patch", "--dry-run", "-p1", file_path, patch_file],
-            capture_output=True, text=True
+        # -p0: 명시적 file_path를 사용할 때는 경로 스트리핑 불필요
+        # -i: 패치 파일 지정 (stdin 대신)
+        base_cmd = ["patch", "-p0", "-i", patch_file, file_path]
+
+        dry = subprocess.run(
+            ["patch", "--dry-run", "-p0", "-i", patch_file, file_path],
+            capture_output=True, text=True, cwd=cwd,
         )
-        if result.returncode != 0:
-            return f"ERROR: dry-run 실패\n{result.stderr}"
+        if dry.returncode != 0:
+            return f"ERROR: dry-run 실패\n{dry.stderr or dry.stdout}"
 
         result = subprocess.run(
-            ["patch", "-p1", file_path, patch_file],
-            capture_output=True, text=True
+            base_cmd,
+            capture_output=True, text=True, cwd=cwd,
         )
         if result.returncode == 0:
             return f"SUCCESS: 패치 적용 완료 — {file_path}"
-        return f"ERROR: 패치 적용 실패\n{result.stderr}"
+        return f"ERROR: 패치 적용 실패\n{result.stderr or result.stdout}"
     finally:
         os.unlink(patch_file)
