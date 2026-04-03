@@ -17,7 +17,7 @@ from langgraph.prebuilt import ToolNode
 from agent.prompts import build_system_prompt
 from config.safety import SAFETY_CONFIG
 from notifier.slack import notify_escalation, notify_resolved, notify_started, request_human_approval
-from storage.db import save_attempt
+from storage.db import save_attempt, save_fix_record, load_past_fixes
 from tools.definitions import TOOLS
 
 MAX_RETRIES = SAFETY_CONFIG["max_retries"]
@@ -76,6 +76,23 @@ class AgentState(TypedDict):
     pending_approval_call: dict | None
 
 
+# ── 유틸리티 ──────────────────────────────────────────────
+
+def _extract_fix_summary(messages: list[BaseMessage]) -> str:
+    """apply_patch / apply_patches_batch 성공 결과에서 수정 요약 추출."""
+    fixes = [
+        msg.content if isinstance(msg.content, str) else str(msg.content)
+        for msg in messages
+        if isinstance(msg, ToolMessage)
+        and "SUCCESS" in (msg.content if isinstance(msg.content, str) else str(msg.content)).upper()
+        and any(
+            kw in (msg.content if isinstance(msg.content, str) else str(msg.content))
+            for kw in ["패치 적용 완료", "PR 생성 완료", "푸시되었습니다"]
+        )
+    ]
+    return " | ".join(fixes) if fixes else "변경 내용 없음"
+
+
 # ── 저장소 경로 매핑 ────────────────────────────────────────
 
 _REPO_PATH_MAP: dict[str, str] = {
@@ -99,11 +116,34 @@ def diagnose_node(state: AgentState) -> dict:
 
     if not state["messages"]:
         repo_path = _resolve_repo_path(state["repo"])
+
+        # 이전 성공 수정 기록 주입
+        past_fixes = load_past_fixes(
+            repo=state["repo"], error_type=state["error_info"]["type"]
+        )
+        past_context = ""
+        if past_fixes:
+            entries = "\n".join(
+                f"  - [{r['created_at']}] 패턴: {r['error_pattern']} → {r['fix_summary']}"
+                for r in past_fixes
+            )
+            past_context = f"\n\n## 이전 동일 유형 성공 수정 기록 (참고용):\n{entries}"
+
+        # 다중 분류 결과 포함
+        secondary = state["error_info"].get("secondary_types", [])
+        secondary_note = (
+            f"\n복합 에러 유형도 감지됨: {', '.join(secondary)}" if secondary else ""
+        )
+
         user_content = (
             f"저장소 로컬 경로: {repo_path}\n\n"
             f"전체 로그:\n{state['logs']}\n\n"
-            f"에러 스니펫:\n{state['error_info']['snippet']}\n\n"
-            f"read_file → apply_patch → security_scan → git_commit_push → re_trigger_pipeline 순서로 진행하세요. "
+            f"에러 스니펫:\n{state['error_info']['snippet']}"
+            f"{secondary_note}"
+            f"{past_context}\n\n"
+            f"read_file → apply_patch(또는 apply_patches_batch) → security_scan → "
+            f"create_fix_pr(또는 git_commit_push) → re_trigger_pipeline 순서로 진행하세요. "
+            f"여러 파일을 동시에 수정할 때는 apply_patches_batch를 사용하세요. "
             f"run_shell은 검증 목적으로만 사용하고 파일 읽기에는 절대 사용하지 마세요."
         )
         messages = [HumanMessage(content=user_content)]
@@ -153,16 +193,45 @@ async def approval_node(state: AgentState) -> dict:
 
 
 def validate_node(state: AgentState) -> dict:
-    # re_trigger_pipeline 또는 git_commit_push 의 SUCCESS만 진짜 해결로 판정
+    """
+    최신 ToolMessage들을 검사해 실제 해결 여부를 판정합니다.
+    인정 조건:
+    - re_trigger_pipeline SUCCESS
+    - git_commit_push SUCCESS (푸시되었습니다)
+    - create_fix_pr SUCCESS (PR 생성 완료)
+    - check_pipeline_status의 conclusion: success
+    """
     for msg in reversed(state["messages"]):
         if not isinstance(msg, ToolMessage):
             continue
         content = msg.content if isinstance(msg.content, str) else str(msg.content)
-        if "SUCCESS" in content.upper() and any(
-            kw in content for kw in ["파이프라인 재실행", "푸시되었습니다"]
-        ):
-            logger.info("[agent] validate | resolved=True (tool SUCCESS 확인)")
+        upper = content.upper()
+
+        # 파이프라인 재실행 성공
+        if "SUCCESS" in upper and "파이프라인 재실행" in content:
+            logger.info("[agent] validate | resolved=True (파이프라인 재실행 SUCCESS)")
             return {"resolved": True}
+
+        # git_commit_push 직접 푸시 성공
+        if "SUCCESS" in upper and "푸시되었습니다" in content:
+            logger.info("[agent] validate | resolved=True (git push SUCCESS)")
+            return {"resolved": True}
+
+        # PR 생성 성공 (create_fix_pr)
+        if "SUCCESS" in upper and "PR 생성 완료" in content:
+            logger.info("[agent] validate | resolved=True (PR 생성 SUCCESS)")
+            return {"resolved": True}
+
+        # check_pipeline_status 결과: 실제 파이프라인이 성공으로 완료됨
+        if "conclusion: success" in content.lower():
+            logger.info("[agent] validate | resolved=True (pipeline conclusion: success)")
+            return {"resolved": True}
+
+        # check_pipeline_status 결과: 파이프라인 실패 → 즉시 재시도 필요
+        if "conclusion: failure" in content.lower():
+            logger.info("[agent] validate | resolved=False (pipeline conclusion: failure)")
+            return {"resolved": False}
+
     logger.info("[agent] validate | resolved=False")
     return {"resolved": False}
 
@@ -254,6 +323,15 @@ async def run_healing_agent(
     if result.get("resolved"):
         logger.info("[agent] 해결 완료 | run_id=%s", run_id)
         notify_resolved(run_id=run_id, repo=repo, attempt_count=result["attempt_count"])
+        fix_summary = _extract_fix_summary(result["messages"])
+        save_fix_record(
+            run_id=run_id,
+            repo=repo,
+            error_type=error_info["type"],
+            error_pattern=error_info.get("matched_pattern"),
+            fix_summary=fix_summary,
+            resolved=True,
+        )
     elif result.get("escalated"):
         logger.warning("[agent] 에스컬레이션 완료 | run_id=%s", run_id)
     else:
