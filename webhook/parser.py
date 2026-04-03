@@ -5,6 +5,19 @@ import re
 
 SNIPPET_WINDOW = 30  # 매칭 라인 앞뒤 몇 줄을 스니펫으로 잘라낼지
 
+# 높은 인덱스일수록 낮은 우선순위 (구체적인 에러 유형을 먼저 처리)
+CATEGORY_PRIORITY: list[str] = [
+    "build",
+    "dependency",
+    "test_failure",
+    "lint",
+    "runtime",
+    "database",
+    "config",
+    "deploy",
+    "infra",
+]
+
 ERROR_PATTERNS: dict[str, list[str]] = {
     "dependency": [
         # Python
@@ -169,24 +182,51 @@ ERROR_PATTERNS: dict[str, list[str]] = {
 
 
 def classify_error(log: str) -> dict:
+    """
+    로그에서 모든 에러 유형을 매칭한 뒤 우선순위에 따라 정렬합니다.
+    - type: 가장 높은 우선순위의 에러 유형 (기본 처리 대상)
+    - secondary_types: 함께 감지된 추가 에러 유형 목록
+    """
     lines = log.splitlines()
+    all_matches: dict[str, dict] = {}
+
     for category, patterns in ERROR_PATTERNS.items():
         for pattern in patterns:
             for i, line in enumerate(lines):
                 if re.search(pattern, line, re.IGNORECASE):
-                    start = max(0, i - SNIPPET_WINDOW)
-                    end = min(len(lines), i + SNIPPET_WINDOW)
-                    snippet = "\n".join(lines[start:end])
-                    return {
-                        "type": category,
-                        "matched_pattern": pattern,
-                        "matched_line": line.strip(),
-                        "snippet": snippet,
-                    }
-    # 패턴 미매칭 — 마지막 2000자 전달
+                    if category not in all_matches:  # 카테고리당 첫 매칭만 보존
+                        start = max(0, i - SNIPPET_WINDOW)
+                        end = min(len(lines), i + SNIPPET_WINDOW)
+                        all_matches[category] = {
+                            "matched_pattern": pattern,
+                            "matched_line": line.strip(),
+                            "snippet": "\n".join(lines[start:end]),
+                        }
+                    break  # 이미 매칭됐으면 같은 카테고리 내 다음 패턴 불필요
+
+    if not all_matches:
+        return {
+            "type": "unknown",
+            "secondary_types": [],
+            "matched_pattern": None,
+            "matched_line": None,
+            "snippet": log[-2000:],
+        }
+
+    # 우선순위 순으로 정렬 (CATEGORY_PRIORITY에 없는 카테고리는 맨 뒤)
+    ordered = sorted(
+        all_matches.items(),
+        key=lambda kv: (
+            CATEGORY_PRIORITY.index(kv[0])
+            if kv[0] in CATEGORY_PRIORITY
+            else len(CATEGORY_PRIORITY)
+        ),
+    )
+    primary_cat, primary_info = ordered[0]
+    secondary = [cat for cat, _ in ordered[1:]]
+
     return {
-        "type": "unknown",
-        "matched_pattern": None,
-        "matched_line": None,
-        "snippet": log[-2000:],
+        "type": primary_cat,
+        "secondary_types": secondary,
+        **primary_info,
     }
