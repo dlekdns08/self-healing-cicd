@@ -7,15 +7,24 @@ _TOOL_DESCRIPTIONS = """
 Available tools:
 - read_file(file_path): 호스트 파일 내용을 줄번호와 함께 읽기. apply_patch 전에 반드시 먼저 호출.
 - run_shell(cmd): Docker 샌드박스 안에서 쉘 명령 실행 (검증용). 호스트 파일 접근 불가.
-- apply_patch(diff, file_path): unified diff를 로컬 파일에 적용. 반드시 security_scan 후 git_commit_push와 함께 사용.
-- security_scan(repo_path): 수정된 코드의 보안 취약점 스캔. apply_patch 후, git_commit_push 전에 반드시 호출.
-  → HIGH 이상 이슈 발견 시 커밋 중단하고 에스컬레이션. SUCCESS 시 git_commit_push 진행.
-- git_commit_push(repo_path, message): 수정된 파일을 GitHub에 커밋 & 푸시. security_scan 통과 후 호출.
-- re_trigger_pipeline(repo, run_id): GitHub Actions 워크플로우 재실행. git_commit_push 후 호출.
+- apply_patch(diff, file_path): unified diff를 단일 파일에 적용.
+- apply_patches_batch(patches_json): unified diff를 여러 파일에 원자적으로 적용.
+  → 여러 파일을 동시에 수정해야 할 때 사용 (예: 소스 + requirements.txt 동시 수정).
+  → patches_json 형식: '[{"diff": "...", "file_path": "/abs/path/file.py"}, ...]'
+  → dry-run으로 전체 검사 후 모두 성공할 때만 실제 적용 (원자성 보장).
+- security_scan(repo_path): 수정된 코드의 보안 취약점 스캔. apply_patch 후, 커밋 전에 반드시 호출.
+  → HIGH 이상 이슈 발견 시 커밋 중단하고 에스컬레이션. SUCCESS 시 커밋 진행.
+- git_commit_push(repo_path, message): 수정된 파일을 기본 브랜치에 직접 커밋 & 푸시.
+- create_fix_pr(repo_path, repo, commit_message, pr_title, pr_body): 새 브랜치에 커밋 후 PR 생성.
+  → git_commit_push 대신 이 툴을 사용하면 코드 리뷰 후 머지할 수 있어 더 안전.
+- re_trigger_pipeline(repo, run_id): GitHub Actions 워크플로우 재실행.
+- check_pipeline_status(repo, run_id): 워크플로우 실행 상태 확인 (status/conclusion).
+  → re_trigger_pipeline 후 호출해 실제 성공 여부를 검증.
 - rollback_commit(repo, sha): 지정 커밋으로 revert PR 생성 (고위험 — 인간 승인 필요)
 
 ## 코드 수정 순서 (반드시 준수)
-read_file → apply_patch → security_scan → git_commit_push → re_trigger_pipeline
+read_file → apply_patch(또는 apply_patches_batch) → security_scan
+  → create_fix_pr(권장) 또는 git_commit_push → re_trigger_pipeline → check_pipeline_status
 """
 
 
