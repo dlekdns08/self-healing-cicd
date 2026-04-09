@@ -19,8 +19,10 @@ def apply_patch(diff: str, file_path: str) -> str:
     허용된 확장자(.py, .ts, .json 등)만 수정 가능합니다.
     """
     ext = os.path.splitext(file_path)[1]
-    if ext not in SAFETY_CONFIG["allowed_file_extensions"]:
-        return f"ERROR: 허용되지 않은 파일 확장자 — {ext}"
+    basename = os.path.basename(file_path)
+    if (ext not in SAFETY_CONFIG["allowed_file_extensions"]
+            and basename not in SAFETY_CONFIG.get("allowed_file_names", [])):
+        return f"ERROR: 허용되지 않은 파일 — {basename} (확장자: {ext or '없음'})"
 
     if not os.path.isfile(file_path):
         return f"ERROR: 파일이 존재하지 않습니다 — {file_path}"
@@ -58,8 +60,10 @@ def apply_patch(diff: str, file_path: str) -> str:
 def _apply_one(diff: str, file_path: str) -> tuple[bool, str]:
     """단일 패치를 적용하고 (성공여부, 메시지)를 반환하는 내부 헬퍼."""
     ext = os.path.splitext(file_path)[1]
-    if ext not in SAFETY_CONFIG["allowed_file_extensions"]:
-        return False, f"허용되지 않은 파일 확장자: {file_path}"
+    basename = os.path.basename(file_path)
+    if (ext not in SAFETY_CONFIG["allowed_file_extensions"]
+            and basename not in SAFETY_CONFIG.get("allowed_file_names", [])):
+        return False, f"허용되지 않은 파일: {file_path} (확장자: {ext or '없음'})"
     if not os.path.isfile(file_path):
         return False, f"파일이 존재하지 않습니다: {file_path}"
     cwd = os.path.dirname(os.path.abspath(file_path))
@@ -100,8 +104,10 @@ def apply_patches_batch(patches_json: str) -> str:
         diff = item.get("diff", "")
         file_path = item.get("file_path", "")
         ext = os.path.splitext(file_path)[1]
-        if ext not in SAFETY_CONFIG["allowed_file_extensions"]:
-            dry_errors.append(f"허용되지 않은 파일 확장자: {file_path}")
+        basename = os.path.basename(file_path)
+        if (ext not in SAFETY_CONFIG["allowed_file_extensions"]
+                and basename not in SAFETY_CONFIG.get("allowed_file_names", [])):
+            dry_errors.append(f"허용되지 않은 파일: {file_path} (확장자: {ext or '없음'})")
             continue
         if not os.path.isfile(file_path):
             dry_errors.append(f"파일이 존재하지 않습니다: {file_path}")
