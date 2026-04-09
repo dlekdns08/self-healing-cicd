@@ -95,10 +95,22 @@ def _extract_fix_summary(messages: list[BaseMessage]) -> str:
 
 # ── 저장소 경로 매핑 ────────────────────────────────────────
 
-_REPO_PATH_MAP: dict[str, str] = {
-    "api": "/app/api",
-    "blog": "/app/blog",
-}
+def _build_repo_path_map() -> dict[str, str]:
+    """환경변수 REPO_PATH_MAP 파싱: 'api:/app/api,blog:/app/blog' 형식
+    미설정 시 기본값 사용."""
+    defaults = {"api": "/app/api", "blog": "/app/blog"}
+    raw = os.environ.get("REPO_PATH_MAP", "")
+    if not raw:
+        return defaults
+    overrides = {}
+    for entry in raw.split(","):
+        if ":" in entry:
+            name, path = entry.split(":", 1)
+            overrides[name.strip().lower()] = path.strip()
+    return {**defaults, **overrides}
+
+
+_REPO_PATH_MAP: dict[str, str] = _build_repo_path_map()
 
 
 def _resolve_repo_path(repo: str) -> str:
@@ -175,7 +187,16 @@ async def approval_node(state: AgentState) -> dict:
     """고위험 툴 실행 전 Slack을 통해 인간 승인을 비동기로 요청."""
     call = state.get("pending_approval_call")
     if not call:
-        logger.warning("[agent] approval_node 호출됐으나 pending_approval_call 없음 — escalate")
+        # diagnose_node는 pending_approval_call을 항상 None으로 반환하므로
+        # messages[-1]의 tool_calls에서 직접 고위험 툴을 찾아냄
+        last = state["messages"][-1]
+        if isinstance(last, AIMessage) and last.tool_calls:
+            for tc in last.tool_calls:
+                if tc["name"] in SAFETY_CONFIG["require_human_approval_for"]:
+                    call = tc
+                    break
+    if not call:
+        logger.warning("[agent] approval_node 호출됐으나 승인 대상 tool_call 없음 — escalate")
         return {"escalated": True}
 
     logger.info("[agent] 인간 승인 요청 | run_id=%s tool=%s", state["run_id"], call["name"])
