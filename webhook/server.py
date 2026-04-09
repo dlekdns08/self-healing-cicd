@@ -3,26 +3,42 @@ FastAPI webhook server — GitHub Actions workflow_run 이벤트 수신 + 범용
 """
 import hashlib
 import hmac
+import logging
 import os
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from agent.graph import run_healing_agent
-from storage.db import save_run_event
+from storage.db import init_db, save_run_event
 from webhook.log_fetcher import fetch_workflow_logs
 from webhook.parser import classify_error
 
-app = FastAPI(title="Self-Healing CI/CD Webhook")
+logger = logging.getLogger(__name__)
 
-GITHUB_WEBHOOK_SECRET = os.environ["GITHUB_WEBHOOK_SECRET"]
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """앱 시작 시 DB 초기화 — uvicorn으로 직접 실행해도 동작."""
+    init_db()
+    logger.info("[webhook] DB 초기화 완료")
+    yield
+
+
+app = FastAPI(title="Self-Healing CI/CD Webhook", lifespan=lifespan)
+
+_GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 CI_WEBHOOK_TOKEN = os.environ.get("CI_WEBHOOK_TOKEN", "")
 
 
 def _verify_signature(body: bytes, sig_header: str) -> None:
+    secret = _GITHUB_WEBHOOK_SECRET
+    if not secret:
+        raise HTTPException(status_code=500, detail="GITHUB_WEBHOOK_SECRET이 설정되지 않았습니다")
     expected = "sha256=" + hmac.new(
-        GITHUB_WEBHOOK_SECRET.encode(), body, hashlib.sha256
+        secret.encode(), body, hashlib.sha256
     ).hexdigest()
     if not hmac.compare_digest(expected, sig_header):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
