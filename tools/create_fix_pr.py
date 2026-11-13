@@ -3,16 +3,18 @@ Tool: create_fix_pr — 수정 사항을 새 브랜치에 커밋하고 GitHub PR
 git_commit_push(직접 push) 대신 사용하면 코드 리뷰 프로세스를 거칠 수 있어 더 안전합니다.
 """
 import os
-import subprocess
 import time
 
 import httpx
 from langchain_core.tools import tool
 
+from tools._guard import is_known_repo, resolve_repo_root, run_git, scrub_remote_credentials
+
 
 def _run(cmd: list[str], cwd: str) -> tuple[int, str]:
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
-    return result.returncode, (result.stdout + result.stderr).strip()
+    """git 서브커맨드 실행 — 토큰은 환경변수로만 전달되고 출력에서 마스킹된다."""
+    assert cmd[0] == "git"
+    return run_git(cmd[1:], cwd=cwd)
 
 
 def _get_headers() -> dict:
@@ -42,19 +44,17 @@ def create_fix_pr(
     pr_title: PR 제목
     pr_body: PR 본문 (수정 이유, 변경 내용 명시)
     """
-    if not os.path.isdir(repo_path):
-        return f"ERROR: 경로가 존재하지 않습니다 — {repo_path}"
+    root = resolve_repo_root(repo_path)
+    if root is None:
+        return f"ERROR: 등록된 저장소 경로가 아닙니다 — {repo_path}"
+    if not is_known_repo(repo):
+        return f"ERROR: 허용되지 않은 저장소입니다 — {repo}"
+    repo_path = root
 
     branch_name = f"self-healing/fix-{int(time.time())}"
 
-    # GITHUB_TOKEN을 remote URL에 삽입
-    token = os.environ.get("GITHUB_TOKEN", "")
-    code, remote = _run(["git", "remote", "get-url", "origin"], cwd=repo_path)
-    if code != 0:
-        return f"ERROR: remote URL 조회 실패\n{remote}"
-    if token and "github.com" in remote and "@" not in remote:
-        authed_remote = remote.replace("https://", f"https://{token}@")
-        _run(["git", "remote", "set-url", "origin", authed_remote], cwd=repo_path)
+    # 토큰은 remote URL 에 저장하지 않고 환경변수로만 전달 (tools/_guard.git_env)
+    scrub_remote_credentials(repo_path)
 
     # 현재 브랜치 이름 저장 (실패 시 복구용)
     _, base_branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path)
@@ -78,7 +78,7 @@ def create_fix_pr(
 
     # GitHub API로 PR 생성
     url = f"https://api.github.com/repos/{repo}/pulls"
-    resp = httpx.post(url, headers=_get_headers(), json={
+    resp = httpx.post(url, headers=_get_headers(), timeout=30, json={
         "title": pr_title,
         "body": pr_body,
         "head": branch_name,

@@ -25,7 +25,7 @@ def _make_sig(body: bytes, secret: str = "test-secret") -> str:
 
 SAMPLE_PAYLOAD = {
     "workflow_run": {"id": 12345, "conclusion": "failure"},
-    "repository": {"full_name": "org/repo"},
+    "repository": {"full_name": "org/api"},
 }
 
 

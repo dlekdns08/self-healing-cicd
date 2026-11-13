@@ -13,6 +13,8 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
+from tools._guard import resolve_repo_root
+
 
 # 공통 보안 패턴 (Python/JS/TS 공통)
 _SECRET_PATTERNS = [
@@ -134,8 +136,10 @@ def security_scan(repo_path: str) -> str:
     repo_path: 저장소 루트 절대경로 (예: /app/api)
     HIGH 이상 이슈가 발견되면 커밋하지 말고 에스컬레이션하세요.
     """
-    if not os.path.isdir(repo_path):
-        return f"ERROR: 경로가 존재하지 않습니다 — {repo_path}"
+    root = resolve_repo_root(repo_path)
+    if root is None or not os.path.isdir(root):
+        return f"ERROR: 등록된 저장소 경로가 아닙니다 — {repo_path}"
+    repo_path = root
 
     all_findings: list[dict] = []
 

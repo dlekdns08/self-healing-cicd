@@ -116,7 +116,7 @@ _REPO_PATH_MAP: dict[str, str] = _build_repo_path_map()
 def _resolve_repo_path(repo: str) -> str:
     """'owner/repo' → 로컬 절대경로"""
     repo_name = repo.split("/")[-1].lower()
-    return _REPO_PATH_MAP.get(repo_name, f"/home/{repo_name}")
+    return _REPO_PATH_MAP.get(repo_name, "")  # 미등록 저장소는 webhook 단계에서 거부됨
 
 
 # ── 노드 정의 ──────────────────────────────────────────────

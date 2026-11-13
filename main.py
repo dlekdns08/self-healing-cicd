@@ -29,6 +29,9 @@ def _validate_env() -> None:
         logger.error(".env 파일 또는 환경변수를 확인하세요 (.env.example 참고)")
         sys.exit(1)
 
+    if not os.environ.get("CI_WEBHOOK_TOKEN"):
+        logger.warning("CI_WEBHOOK_TOKEN 미설정 — /webhook/ci 는 모든 요청을 503으로 거부합니다")
+
     provider = os.environ.get("LLM_PROVIDER", "anthropic").lower()
     if provider == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
         logger.error("LLM_PROVIDER=anthropic이지만 ANTHROPIC_API_KEY가 설정되지 않았습니다")

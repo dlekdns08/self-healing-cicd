@@ -3,11 +3,19 @@ Tool: rollback_commit — 지정 커밋으로 revert PR 생성 (고위험)
 인간 승인 게이트를 반드시 통과한 후에만 실행됩니다.
 """
 import os
-import subprocess
 import time
 
 import httpx
 from langchain_core.tools import tool
+
+from tools._guard import (
+    is_known_repo,
+    is_valid_sha,
+    repo_path_map,
+    resolve_repo_root,
+    run_git,
+    scrub_remote_credentials,
+)
 
 
 def _get_headers() -> dict:
@@ -21,28 +29,14 @@ def _get_headers() -> dict:
 
 
 def _run(cmd: list[str], cwd: str) -> tuple[int, str]:
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
-    return result.returncode, (result.stdout + result.stderr).strip()
-
-
-# 저장소 이름 → 로컬 경로 매핑 (graph.py와 동일한 기본값)
-_REPO_PATH_DEFAULTS: dict[str, str] = {
-    "api": "/app/api",
-    "blog": "/app/blog",
-}
+    """git 서브커맨드 실행 — 토큰은 환경변수로만 전달되고 출력에서 마스킹된다."""
+    assert cmd[0] == "git"
+    return run_git(cmd[1:], cwd=cwd)
 
 
 def _resolve_repo_path(repo: str) -> str:
-    """'owner/repo' → 로컬 절대경로. REPO_PATH_MAP 환경변수 우선 적용."""
-    repo_name = repo.split("/")[-1].lower()
-    raw = os.environ.get("REPO_PATH_MAP", "")
-    overrides: dict[str, str] = {}
-    for entry in raw.split(","):
-        if ":" in entry:
-            name, path = entry.split(":", 1)
-            overrides[name.strip().lower()] = path.strip()
-    mapping = {**_REPO_PATH_DEFAULTS, **overrides}
-    return mapping.get(repo_name, f"/home/{repo_name}")
+    """'owner/repo' → 로컬 절대경로 (REPO_PATH_MAP 에 등록된 저장소만)."""
+    return repo_path_map().get(repo.split("/")[-1].lower(), "")
 
 
 @tool
@@ -54,25 +48,24 @@ def rollback_commit(repo: str, sha: str, reason: str, repo_path: str = "") -> st
     이 툴은 인간 승인이 필요합니다.
     repo_path: 저장소 로컬 경로 (미지정 시 자동 추론)
     """
-    resolved_path = repo_path or _resolve_repo_path(repo)
-    if not os.path.isdir(resolved_path):
-        return f"ERROR: 저장소 경로가 존재하지 않습니다 — {resolved_path}"
+    if not is_known_repo(repo):
+        return f"ERROR: 허용되지 않은 저장소입니다 — {repo}"
+    # sha 는 git 인자·GitHub API URL 에 그대로 들어가므로 16진수만 허용 (옵션/경로 인젝션 방지)
+    if not is_valid_sha(sha):
+        return f"ERROR: 잘못된 커밋 SHA — {sha!r}"
+    resolved_path = resolve_repo_root(repo_path or _resolve_repo_path(repo))
+    if resolved_path is None:
+        return f"ERROR: 등록된 저장소 경로가 아닙니다 — {repo_path or repo}"
 
     # 1. 커밋 존재 여부 확인
     url = f"https://api.github.com/repos/{repo}/git/commits/{sha}"
-    resp = httpx.get(url, headers=_get_headers())
+    resp = httpx.get(url, headers=_get_headers(), timeout=30)
     if resp.status_code != 200:
         return f"ERROR: 커밋 조회 실패 — HTTP {resp.status_code}"
     commit_msg = resp.json().get("message", "")
 
-    # 2. GITHUB_TOKEN을 remote URL에 삽입
-    token = os.environ.get("GITHUB_TOKEN", "")
-    code, remote = _run(["git", "remote", "get-url", "origin"], cwd=resolved_path)
-    if code != 0:
-        return f"ERROR: remote URL 조회 실패\n{remote}"
-    if token and "github.com" in remote and "@" not in remote:
-        authed_remote = remote.replace("https://", f"https://{token}@")
-        _run(["git", "remote", "set-url", "origin", authed_remote], cwd=resolved_path)
+    # 2. 토큰은 remote URL 에 저장하지 않고 환경변수로만 전달 (tools/_guard.git_env)
+    scrub_remote_credentials(resolved_path)
 
     # 3. 현재 브랜치 저장 (실패 시 복구용)
     _, base_branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=resolved_path)
@@ -118,7 +111,7 @@ def rollback_commit(repo: str, sha: str, reason: str, repo_path: str = "") -> st
 
     # 7. GitHub PR 생성
     pr_url_api = f"https://api.github.com/repos/{repo}/pulls"
-    pr_resp = httpx.post(pr_url_api, headers=_get_headers(), json={
+    pr_resp = httpx.post(pr_url_api, headers=_get_headers(), timeout=30, json={
         "title": f"[Rollback] Revert {sha[:8]}: {reason[:60]}",
         "body": (
             f"## 자동 롤백 PR\n\n"

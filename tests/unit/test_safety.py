@@ -19,5 +19,5 @@ def test_fork_bomb_blocked():
 def test_allowed_command_passes_to_sandbox():
     with patch("tools.run_shell.run_in_sandbox", return_value="SUCCESS (exit=0)\n") as mock:
         result = run_shell.invoke({"cmd": "pip install requests"})
-        mock.assert_called_once_with("pip install requests")
+        mock.assert_called_once_with("pip install requests", network="bridge")
         assert "SUCCESS" in result

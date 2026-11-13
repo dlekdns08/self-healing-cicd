@@ -6,6 +6,8 @@ import os
 import httpx
 from langchain_core.tools import tool
 
+from tools._guard import is_known_repo
+
 
 def _get_headers() -> dict:
     """헤더를 호출 시점에 생성 — import 시 토큰이 없어도 크래시 방지."""
@@ -23,8 +25,10 @@ def re_trigger_pipeline(repo: str, run_id: int) -> str:
     실패한 GitHub Actions 워크플로우를 재실행합니다.
     수정 적용 후 결과를 검증할 때 사용하세요.
     """
-    url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/rerun"
-    resp = httpx.post(url, headers=_get_headers())
+    if not is_known_repo(repo):
+        return f"ERROR: 허용되지 않은 저장소입니다 — {repo}"
+    url = f"https://api.github.com/repos/{repo}/actions/runs/{int(run_id)}/rerun"
+    resp = httpx.post(url, headers=_get_headers(), timeout=30)
     if resp.status_code == 201:
         return f"SUCCESS: 파이프라인 재실행 요청 완료 (run_id={run_id})"
     return f"ERROR: 재실행 실패 — HTTP {resp.status_code}\n{resp.text}"
@@ -39,8 +43,10 @@ def check_pipeline_status(repo: str, run_id: int) -> str:
       - 진행 중: "status: queued|in_progress | conclusion: (진행 중)"
       - 완료: "status: completed | conclusion: success|failure|cancelled"
     """
-    url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}"
-    resp = httpx.get(url, headers=_get_headers())
+    if not is_known_repo(repo):
+        return f"ERROR: 허용되지 않은 저장소입니다 — {repo}"
+    url = f"https://api.github.com/repos/{repo}/actions/runs/{int(run_id)}"
+    resp = httpx.get(url, headers=_get_headers(), timeout=30)
     if resp.status_code != 200:
         return f"ERROR: 상태 조회 실패 — HTTP {resp.status_code}\n{resp.text}"
 

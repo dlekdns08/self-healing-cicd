@@ -17,11 +17,16 @@ def run_in_sandbox(cmd: str, network: str = "none") -> str:
       - "none" (기본값): 네트워크 차단 — 파일 검증, 린트 등에 사용
       - "bridge": 인터넷 허용 — pip install, npm ci 등 패키지 설치 시 사용
     """
+    if network not in ("none", "bridge"):
+        return f"ERROR: 허용되지 않은 네트워크 모드 — {network}"
     docker_cmd = [
         "docker", "run", "--rm",
         "--network", network,
         "--memory", "512m",
         "--cpus", "1",
+        "--pids-limit", "256",          # fork bomb 방지
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
         "--read-only",
         "--tmpfs", "/tmp",
         SANDBOX_IMAGE,
